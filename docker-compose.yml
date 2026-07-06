@@ -1,0 +1,223 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: store-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - store-network
+
+  mongodb:
+    image: mongo:7.0
+    container_name: store-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - store-network
+
+  redis:
+    image: redis:alpine
+    container_name: store-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - store-network
+
+  seq:
+    image: datalust/seq:2024.3
+    container_name: store-seq
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+    ports:
+      - "5341:80"
+    networks:
+      - store-network
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: store-sqlserver
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Your_strong_password_123"
+    ports:
+      - "14330:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    networks:
+      - store-network
+
+  productcatalogservice:
+    build:
+      context: .
+      dockerfile: src/ProductCatalogService/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+      - redis
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Redis: redis:6379
+      Seq__ServerUrl: http://seq:5341
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    networks:
+      - store-network
+
+  productcatalogservice-lb:
+    profiles: ["lb"]
+    build:
+      context: .
+      dockerfile: src/ProductCatalogService/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+      - redis
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Redis: redis:6379
+      Seq__ServerUrl: http://seq:5341
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    networks:
+      - store-network
+
+  apigateway:
+    build:
+      context: .
+      dockerfile: src/ApiGateway/Dockerfile
+    container_name: apigateway
+    restart: unless-stopped
+    depends_on:
+      - productcatalogservice
+      - inventoryservice
+      - orderservice
+      - notificationservice
+      - seq
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      Seq__ServerUrl: http://seq:5341
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+    ports:
+      - "5000:8080"
+    networks:
+      - store-network
+
+  inventoryservice:
+    build:
+      context: .
+      dockerfile: src/InventoryService/Dockerfile
+    container_name: inventoryservice
+    restart: unless-stopped
+    depends_on:
+      - sqlserver
+      - rabbitmq
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__InventoryDatabase: Server=sqlserver,1433;Database=InventoryServiceDb;User Id=sa;Password=Your_strong_password_123;TrustServerCertificate=True;Encrypt=False
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__Username: guest
+      RabbitMQ__Password: guest
+      Seq__ServerUrl: http://seq:5341
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    ports:
+      - "8082:8080"
+    networks:
+      - store-network
+
+  orderservice:
+    build:
+      context: .
+      dockerfile: src/OrderService/Dockerfile
+    container_name: orderservice
+    restart: unless-stopped
+    depends_on:
+      - sqlserver
+      - rabbitmq
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__OrderDatabase: Server=sqlserver,1433;Database=OrderServiceDb;User Id=sa;Password=Your_strong_password_123;TrustServerCertificate=True;Encrypt=False
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__Username: guest
+      RabbitMQ__Password: guest
+      Seq__ServerUrl: http://seq:5341
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    ports:
+      - "8083:8080"
+    networks:
+      - store-network
+
+  notificationservice:
+    build:
+      context: .
+      dockerfile: src/NotificationService/Dockerfile
+    container_name: notificationservice
+    restart: unless-stopped
+    depends_on:
+      - sqlserver
+      - rabbitmq
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__NotificationDatabase: Server=sqlserver,1433;Database=NotificationServiceDb;User Id=sa;Password=Your_strong_password_123;TrustServerCertificate=True;Encrypt=False
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__Username: guest
+      RabbitMQ__Password: guest
+      Seq__ServerUrl: http://seq:5341
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    ports:
+      - "8084:8080"
+    networks:
+      - store-network
+
+volumes:
+  mongodb_data:
+  sqlserver_data:
+
+networks:
+  store-network:
+    driver: bridge
